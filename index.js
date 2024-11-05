@@ -19,9 +19,9 @@ app.use(
       "https://glamersbd.web.app",
       "https://glameersbd.com",
 
-      "http://localhost:3000/",
-      "https://trendy-management.web.app",
-      "https://trendy-management.firebaseapp.com",
+      "http://localhost:3000",
+      "https://gloss-sarver.web.app",
+      "https://gloss-sarver.firebaseapp.com",
     ],
     credentials: true,
   })
