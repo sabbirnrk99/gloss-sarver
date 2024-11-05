@@ -16,8 +16,9 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
-      "https://glamersbd.web.app",
-      "https://glameersbd.com",
+      "http://localhost:5175",
+      "https://gloss-clint.web.app",
+      "https://glossandglows.com",
 
       "http://localhost:3000",
       "https://gloss-sarver.web.app",
