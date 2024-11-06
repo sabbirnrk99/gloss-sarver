@@ -7,26 +7,37 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const bodyParser = require("body-parser");
 const XLSX = require("xlsx");
-const port = process.env.PORT || 5000;
+
+const port = process.env.PORT || 4000;
 
 // Middleware
 app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "https://trendy-management.web.app",
-      "https://trendy-management.firebaseapp.com",
+      "http://localhost:5174",
+      "http://localhost:5175",
+      "http://localhost:5177",
+      "https://gloss-clint.web.app",
+      "https://glossandglows.com",
+
+      "http://localhost:3000",
+      "https://gloss-sarver.web.app",
+      "https://gloss-sarver.firebaseapp.com",
     ],
     credentials: true,
   })
 );
+// Increase request size limit
+app.use(express.json({ limit: "20mb" })); // Adjust the size as needed
+app.use(express.urlencoded({ limit: "20mb", extended: true }));
 app.use(express.json());
 app.use(bodyParser.json());
 // Set up multer for file storage
 const upload = multer({ dest: "uploads/" }); // 'uploads/' directory will store the files temporarily
 
 // MongoDB URI
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.camyj.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@glossandglows.u7fodab.mongodb.net/?retryWrites=true&w=majority&appName=glossandglows`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -52,133 +63,483 @@ async function run() {
     const pathaowAreaCollection = database.collection("PathaowArea");
     const steadFastPaymentCollection = database.collection("SteadFastPayment");
     const redxPaymentCollection = database.collection("RedxPayment");
+    const categoryCollection = database.collection("Category");
 
+    // API Route to get products by subcategory name
+    app.get("/api/products/subcategory/:subcategory", async (req, res) => {
+      const { subcategory } = req.params; // e.g., "Laptops"
+      try {
+        const products = await productCollection
+          .find({
+            "parentcode.subproduct": {
+              $elemMatch: {
+                subcategory: subcategory, // Filter by subcategory
+                status: "Website", // Filter by status
+              },
+            },
+          })
+          .toArray();
 
+        // Filter subproducts matching the specified subcategory and status
+        const filteredProducts = products
+          .map((product) => ({
+            ...product,
+            subproduct: product.parentcode.subproduct.filter(
+              (sub) =>
+                sub.subcategory === subcategory && sub.status === "Website"
+            ),
+          }))
+          .filter((p) => p.subproduct.length > 0); // Only include products with matching subproducts
+
+        res.json({ products: filteredProducts });
+      } catch (error) {
+        console.error("Error fetching products by subcategory:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch products by subcategory" });
+      }
+    });
+
+    app.get("/api/products/category/:categoryName", async (req, res) => {
+      const { categoryName } = req.params;
+      try {
+        // Find products that have the specified category name
+        const products = await productCollection
+          .find({ "parentcode.subproduct.category": categoryName })
+          .toArray();
+
+        res.json({ products });
+      } catch (error) {
+        console.error("Error fetching products by category:", error);
+        res
+          .status(500)
+          .json({ message: "Failed to fetch products by category" });
+      }
+    });
+
+    // Add this route to your backend `index.js`
+    app.get("/api/category/:categoryName/products", async (req, res) => {
+      try {
+        const { categoryName } = req.params;
+        const limit = parseInt(req.query.limit) || 4;
+
+        // Query for products with the specified category and status "Website"
+        const products = await productCollection
+          .find({
+            "parentcode.subproduct.category": categoryName,
+            "parentcode.subproduct.status": "Website",
+          })
+          .limit(limit)
+          .toArray();
+
+        // Filter the subproducts by the category name and status
+        const filteredProducts = products
+          .map((product) => ({
+            ...product,
+            parentcode: {
+              ...product.parentcode,
+              subproduct: product.parentcode.subproduct.filter(
+                (sub) =>
+                  sub.category === categoryName && sub.status === "Website"
+              ),
+            },
+          }))
+          .filter((p) => p.parentcode.subproduct.length > 0);
+
+        res.status(200).json({ products: filteredProducts });
+      } catch (error) {
+        console.error("Error fetching products by category:", error);
+        res.status(500).json({ message: "Failed to fetch products" });
+      }
+    });
+
+    // Fetch detailed category information, including subcategories
+    app.get("/api/categories/details", async (req, res) => {
+      try {
+        const categories = await database
+          .collection("Category")
+          .find({})
+          .toArray();
+        res.status(200).json({ categories });
+      } catch (error) {
+        console.error("Error fetching categories:", error);
+        res.status(500).json({ message: "Failed to fetch categories" });
+      }
+    });
+
+    
+
+// Delete Subcategory or Entire Parent Category
+app.delete("/api/categories", async (req, res) => {
+  const { parentCategoryId, subCategorySlug } = req.body;
+
+  try {
+    if (subCategorySlug) {
+      // Remove the specific subcategory by its slug
+      const updateResult = await categoryCollection.updateOne(
+        { _id: new ObjectId(parentCategoryId) },
+        { $pull: { subcategories: { slug: subCategorySlug } } }
+      );
+
+      if (updateResult.modifiedCount === 0) {
+        return res.status(404).json({ message: "Subcategory not found" });
+      }
+      res.status(200).json({ message: "Subcategory deleted successfully" });
+    } else {
+      // Remove the entire parent category using its _id
+      const deleteResult = await categoryCollection.deleteOne({
+        _id: new ObjectId(parentCategoryId),
+      });
+
+      if (deleteResult.deletedCount === 0) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+      res.status(200).json({ message: "Category deleted successfully" });
+    }
+  } catch (error) {
+    console.error("Error deleting category:", error);
+    res.status(500).json({ message: "Failed to delete category", error });
+  }
+});
+
+    // Add subcategory to a parent category
+    app.post("/api/categories/add-subcategory", async (req, res) => {
+      const { parentCategory, subCategory, subCategorySlug } = req.body;
+
+      if (!parentCategory || !subCategory || !subCategorySlug) {
+        return res.status(400).json({
+          message: "Parent category, subcategory, and slug are required",
+        });
+      }
+
+      try {
+        const result = await database.collection("Category").updateOne(
+          { mainCategory: parentCategory },
+          {
+            $push: {
+              subcategories: {
+                name: subCategory,
+                slug: subCategorySlug,
+              },
+            },
+          }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ message: "Parent category not found" });
+        }
+
+        res.status(201).json({ message: "Subcategory added successfully" });
+      } catch (error) {
+        console.error("Error adding subcategory:", error);
+        res.status(500).json({ message: "Failed to add subcategory" });
+      }
+    });
+
+    // Category collection route
+    app.post("/api/categories", async (req, res) => {
+      const { mainCategory, mainCategorySlug } = req.body;
+
+      if (!mainCategory || !mainCategorySlug) {
+        return res
+          .status(400)
+          .json({ message: "Main category and slug are required" });
+      }
+
+      try {
+        const newCategory = {
+          mainCategory,
+          mainCategorySlug,
+          subcategories: [], // Initialize with an empty array for potential subcategories later
+        };
+
+        await database.collection("Category").insertOne(newCategory);
+        res.status(201).json({ message: "Main category added successfully" });
+      } catch (error) {
+        console.error("Error adding category:", error);
+        res.status(500).json({ message: "Failed to add category" });
+      }
+    });
+
+    app.get("/api/categories/main", async (req, res) => {
+      try {
+        // Fetch main categories with proper structure
+        const categories = await categoryCollection
+          .find({}, { projection: { mainCategory: 1, mainCategorySlug: 1 } })
+          .toArray();
+
+        // Format categories to include mainCategory and mainCategorySlug correctly
+        const formattedCategories = categories.map((category) => ({
+          _id: category._id,
+          name: category.mainCategory, // map mainCategory as name
+          slug: category.mainCategorySlug || "", // handle missing slug if any
+        }));
+
+        res.status(200).json({ categories: formattedCategories });
+      } catch (error) {
+        console.error("Error fetching main categories:", error);
+        res.status(500).json({ message: "Failed to fetch main categories" });
+      }
+    });
+
+    // Endpoint to get categories with subcategories
+    app.get("/api/categories", async (req, res) => {
+      try {
+        const categories = await database
+          .collection("Category")
+          .find()
+          .toArray();
+        // Ensure each category’s subcategories are in array format
+        const formattedCategories = categories.map((category) => {
+          const mainCategoryName = Object.keys(category).find(
+            (key) => key !== "_id"
+          );
+          return {
+            _id: category._id,
+            name: mainCategoryName,
+            subcategories: Array.isArray(category[mainCategoryName])
+              ? category[mainCategoryName]
+              : [],
+          };
+        });
+        res.json({ categories: formattedCategories });
+      } catch (error) {
+        console.error("Error fetching categories:", error);
+        res.status(500).json({ message: "Failed to fetch categories" });
+      }
+    });
+
+    // 1. Fetch product by slug
+    app.get("/api/product/:slug", async (req, res) => {
+      const { slug } = req.params;
+      try {
+        const product = await productCollection.findOne({
+          "parentcode.subproduct.slug": slug,
+        });
+
+        if (!product) {
+          return res.status(404).json({ message: "Product not found" });
+        }
+
+        // Find the specific subproduct with the matching slug
+        const subproduct = product.parentcode.subproduct.find(
+          (sub) => sub.slug === slug
+        );
+
+        if (!subproduct) {
+          return res.status(404).json({ message: "Subproduct not found" });
+        }
+
+        res.json({
+          ...subproduct,
+          category: product.category, // Add category for related products
+          parentProductName: product._id,
+        });
+      } catch (error) {
+        console.error("Error fetching product by slug:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // Fetch related products by category (excluding the current product and ensuring status is "Website")
+app.get("/api/category/products", async (req, res) => {
+  const { category, limit = 4, excludeSku } = req.query;
+
+  try {
+    const pipeline = [
+      {
+        $match: {
+          category,
+          "parentcode.subproduct": {
+            $elemMatch: { sku: { $ne: excludeSku }, status: "Website" }
+          }
+        }
+      },
+      {
+        $project: {
+          "parentcode.subproduct": {
+            $filter: {
+              input: "$parentcode.subproduct",
+              as: "sub",
+              cond: {
+                $and: [
+                  { $ne: ["$$sub.sku", excludeSku] },
+                  { $eq: ["$$sub.status", "Website"] }
+                ]
+              }
+            }
+          }
+        }
+      },
+      { $limit: parseInt(limit, 10) }
+    ];
+
+    const products = await productCollection.aggregate(pipeline).toArray();
+    res.json({ products });
+  } catch (error) {
+    console.error("Error fetching related products:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+    // 3. Fetch products with pagination and filter by price range and category
+    app.get("/api/products/filter", async (req, res) => {
+      const {
+        category,
+        minPrice = 10,
+        maxPrice = Infinity,
+        page = 1,
+        limit = 50,
+      } = req.query;
+
+      try {
+        const pipeline = [
+          {
+            $match: {
+              category,
+              "parentcode.subproduct.selling_price": {
+                $gte: parseInt(minPrice, 10),
+                $lte: parseInt(maxPrice, 10),
+              },
+            },
+          },
+          { $skip: (page - 1) * limit },
+          { $limit: parseInt(limit, 10) },
+        ];
+
+        const products = await productCollection.aggregate(pipeline).toArray();
+        const totalPages = Math.ceil(products.length / limit);
+
+        res.json({ products, totalPages });
+      } catch (error) {
+        console.error("Error fetching products:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
+
+    // // Fetch products with pagination and filters
+    // app.get("/api/products/pagination", async (req, res) => {
+    //   const { category, minPrice, maxPrice, page = 1, limit = 50 } = req.query;
+    //   const filters = {};
+
+    //   // Apply filters based on query parameters
+    //   if (category) filters["category"] = category;
+    //   if (minPrice || maxPrice) {
+    //     filters["parentcode.subproduct.selling_price"] = {
+    //       ...(minPrice ? { $gte: parseInt(minPrice) } : {}),
+    //       ...(maxPrice ? { $lte: parseInt(maxPrice) } : {}),
+    //     };
+    //   }
+
+    //   // Log filters and query parameters for debugging
+    //   console.log("Query Parameters:", {
+    //     category,
+    //     minPrice,
+    //     maxPrice,
+    //     page,
+    //     limit,
+    //   });
+    //   console.log("Filters Applied:", filters);
+
+    //   try {
+    //     const productCollection = client
+    //       .db("Trendy_management")
+    //       .collection("Product");
+
+    //     // Log message before fetching products
+    //     console.log("Fetching products with filters...");
+
+    //     const products = await productCollection
+    //       .find(filters)
+    //       .skip((page - 1) * parseInt(limit))
+    //       .limit(parseInt(limit))
+    //       .toArray();
+
+    //     const totalProducts = await productCollection.countDocuments(filters);
+    //     const totalPages = Math.ceil(totalProducts / limit);
+
+    //     // Log fetched products and pagination details
+    //     console.log("Fetched Products:", products.length);
+    //     console.log(
+    //       "Total Products:",
+    //       totalProducts,
+    //       "Total Pages:",
+    //       totalPages
+    //     );
+
+    //     res.json({ products, totalPages });
+    //   } catch (error) {
+    //     console.error("Error fetching products:", error);
+    //     res.status(500).json({ message: "Failed to fetch products" });
+    //   }
+    // });
+
+    // Fetch products with pagination and filters
+    app.get("/api/products/pagination", async (req, res) => {
+      const { category, page = 1, limit = 20 } = req.query;
+      const filters = {};
+  
+      if (category) {
+          filters["parentcode.subproduct.category"] = category;
+      }
+  
+      filters["parentcode.subproduct.status"] = "Website";
+      filters["parentcode.subproduct.selling_price"] = { $gt: 0 };
+  
+      console.log("Query Parameters:", { category, page, limit });
+      console.log("Filters Applied:", filters);
+  
+      try {
+          const productCollection = client.db("Trendy_management").collection("Product");
+  
+          // Fetch products with filters, pagination, and projection to limit data size
+          const products = await productCollection
+              .find(filters, {
+                  projection: {
+                      "parentcode.subproduct.sku": 1,
+                      "parentcode.subproduct.name": 1,
+                      "parentcode.subproduct.selling_price": 1,
+                      "parentcode.subproduct.thumbnail": 1,
+                      "parentcode.subproduct.slug": 1, // Include slug in projection
+                  }
+              })
+              .skip((page - 1) * parseInt(limit, 10))
+              .limit(parseInt(limit, 10))
+              .toArray();
+  
+          const totalProducts = await productCollection.countDocuments(filters);
+          const totalPages = Math.ceil(totalProducts / limit);
+  
+          console.log("Fetched Products Count:", products.length);
+          console.log("Total Products:", totalProducts, "Total Pages:", totalPages);
+  
+          res.json({ products, totalPages });
+      } catch (error) {
+          console.error("Error fetching products:", error);
+          res.status(500).json({ message: "Failed to fetch products" });
+      }
+  });
 
     // Function to check and update OrderManagement collection based on RedxPayment data
     const updateOrderManagementForRedx = async () => {
       try {
-          // Fetch all entries from RedxPayment
-          const redxPayments = await redxPaymentCollection.find().toArray();
-    
-          for (const payment of redxPayments) {
-              const { invoice, codAmount, shippingCharge, status } = payment;
-    
-              // Find the matching order in OrderManagement by invoiceId and status: "Redx"
-              // Exclude orders with consignmentStatus: "Parcel Due"
-              const order = await ordersCollection.findOne({
-                  invoiceId: invoice,
-                  status: "Redx",
-                  consignmentStatus: { $ne: "Parcel Due" },
-              });
-    
-              if (order) {
-                  let updateFields = {};
-    
-                  if (status === "Returned") {
-                      if (order.logisticStatus === "Returned") {
-                          updateFields = { shippingCharge: shippingCharge };
-                      } else {
-                          updateFields = { consignmentStatus: "Parcel Due" };
-                      }
-                  } else if (status === "Completed") {
-                      updateFields = {
-                          logisticStatus: "Completed",
-                          codAmount: codAmount,
-                          shippingCharge: shippingCharge,
-                      };
-                  } else if (status === "Partial") {
-                      if (order.logisticStatus === "Partial") {
-                          updateFields = {
-                              codAmount: codAmount,
-                              shippingCharge: shippingCharge,
-                          };
-                      } else {
-                          updateFields = { consignmentStatus: "Parcel Due" };
-                      }
-                  }
-    
-                  // Update the order in OrderManagement
-                  await ordersCollection.updateOne(
-                      { invoiceId: invoice },
-                      { $set: updateFields }
-                  );
-                  console.log(`Order ${invoice} updated successfully for Redx.`);
-              } else {
-                  console.log(`Order ${invoice} not found in OrderManagement for Redx.`);
-              }
-          }
-      } catch (error) {
-          console.error("Error updating OrderManagement for Redx:", error);
-      }
-    };
+        // Fetch all entries from RedxPayment
+        const redxPayments = await redxPaymentCollection.find().toArray();
 
-// Schedule the job to run every 4 hours
-cron.schedule("0 */4 * * *", () => {
-  console.log("Running scheduled task to update OrderManagement based on RedxPayment");
-  updateOrderManagementForRedx();
-});
-
-    app.post('/api/upload-redx', upload.single('file'), async (req, res) => {
-      if (!req.file) {
-          return res.status(400).json({ message: 'No file uploaded' });
-      }
-  
-      try {
-          // Read the Excel file
-          const workbook = XLSX.readFile(req.file.path);
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const data = XLSX.utils.sheet_to_json(worksheet);
-  
-          // Prepare data for MongoDB insertion
-          const processedData = data.map(row => ({
-              orderId: row["Order ID"] || '',
-              invoice: row.Invoice || '',
-              codAmount: parseFloat(row["COD Amount"] || 0),
-              shippingCharge: parseFloat(row["Shipping Charge"] || 0),
-              status: row.Status || ''
-          }));
-  
-          const database = client.db("Trendy_management");
-          const redxPaymentCollection = database.collection("RedxPayment");
-  
-          // Insert data into RedxPayment collection
-          const insertResult = await redxPaymentCollection.insertMany(processedData);
-  
-          res.status(200).json({
-              message: 'File uploaded and processed successfully!',
-              insertedCount: insertResult.insertedCount
-          });
-      } catch (error) {
-          console.error("Error processing file:", error);
-          res.status(500).json({ message: "Failed to process the file", error: error.message });
-      }
-  });
-
-
-
-
-    // Function to check and update OrderManagement collection
-    const updateOrderManagement = async () => {
-      try {
-        // Fetch all entries from SteadFastPayment
-        const steadFastPayments = await steadFastPaymentCollection.find().toArray();
-    
-        for (const payment of steadFastPayments) {
+        for (const payment of redxPayments) {
           const { invoice, codAmount, shippingCharge, status } = payment;
-    
-          // Find the matching order in OrderManagement by invoiceId and status: "Steadfast"
+
+          // Find the matching order in OrderManagement by invoiceId and status: "Redx"
           // Exclude orders with consignmentStatus: "Parcel Due"
           const order = await ordersCollection.findOne({
             invoiceId: invoice,
-            status: "Steadfast",
+            status: "Redx",
             consignmentStatus: { $ne: "Parcel Due" },
           });
-    
+
           if (order) {
             let updateFields = {};
-    
+
             if (status === "Returned") {
               if (order.logisticStatus === "Returned") {
                 updateFields = { shippingCharge: shippingCharge };
@@ -201,7 +562,119 @@ cron.schedule("0 */4 * * *", () => {
                 updateFields = { consignmentStatus: "Parcel Due" };
               }
             }
-    
+
+            // Update the order in OrderManagement
+            await ordersCollection.updateOne(
+              { invoiceId: invoice },
+              { $set: updateFields }
+            );
+            console.log(`Order ${invoice} updated successfully for Redx.`);
+          } else {
+            console.log(
+              `Order ${invoice} not found in OrderManagement for Redx.`
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Error updating OrderManagement for Redx:", error);
+      }
+    };
+
+    // Schedule the job to run every 4 hours
+    cron.schedule("0 */4 * * *", () => {
+      console.log(
+        "Running scheduled task to update OrderManagement based on RedxPayment"
+      );
+      updateOrderManagementForRedx();
+    });
+
+    app.post("/api/upload-redx", upload.single("file"), async (req, res) => {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      try {
+        // Read the Excel file
+        const workbook = XLSX.readFile(req.file.path);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const data = XLSX.utils.sheet_to_json(worksheet);
+
+        // Prepare data for MongoDB insertion
+        const processedData = data.map((row) => ({
+          orderId: row["Order ID"] || "",
+          invoice: row.Invoice || "",
+          codAmount: parseFloat(row["COD Amount"] || 0),
+          shippingCharge: parseFloat(row["Shipping Charge"] || 0),
+          status: row.Status || "",
+        }));
+
+        const database = client.db("Trendy_management");
+        const redxPaymentCollection = database.collection("RedxPayment");
+
+        // Insert data into RedxPayment collection
+        const insertResult = await redxPaymentCollection.insertMany(
+          processedData
+        );
+
+        res.status(200).json({
+          message: "File uploaded and processed successfully!",
+          insertedCount: insertResult.insertedCount,
+        });
+      } catch (error) {
+        console.error("Error processing file:", error);
+        res.status(500).json({
+          message: "Failed to process the file",
+          error: error.message,
+        });
+      }
+    });
+
+    // Function to check and update OrderManagement collection
+    const updateOrderManagement = async () => {
+      try {
+        // Fetch all entries from SteadFastPayment
+        const steadFastPayments = await steadFastPaymentCollection
+          .find()
+          .toArray();
+
+        for (const payment of steadFastPayments) {
+          const { invoice, codAmount, shippingCharge, status } = payment;
+
+          // Find the matching order in OrderManagement by invoiceId and status: "Steadfast"
+          // Exclude orders with consignmentStatus: "Parcel Due"
+          const order = await ordersCollection.findOne({
+            invoiceId: invoice,
+            status: "Steadfast",
+            consignmentStatus: { $ne: "Parcel Due" },
+          });
+
+          if (order) {
+            let updateFields = {};
+
+            if (status === "Returned") {
+              if (order.logisticStatus === "Returned") {
+                updateFields = { shippingCharge: shippingCharge };
+              } else {
+                updateFields = { consignmentStatus: "Parcel Due" };
+              }
+            } else if (status === "Completed") {
+              updateFields = {
+                logisticStatus: "Completed",
+                codAmount: codAmount,
+                shippingCharge: shippingCharge,
+              };
+            } else if (status === "Partial") {
+              if (order.logisticStatus === "Partial") {
+                updateFields = {
+                  codAmount: codAmount,
+                  shippingCharge: shippingCharge,
+                };
+              } else {
+                updateFields = { consignmentStatus: "Parcel Due" };
+              }
+            }
+
             // Update the order in OrderManagement
             await ordersCollection.updateOne(
               { invoiceId: invoice },
@@ -263,12 +736,10 @@ cron.schedule("0 */4 * * *", () => {
           });
         } catch (error) {
           console.error("Error processing file:", error);
-          res
-            .status(500)
-            .json({
-              message: "Failed to process the file",
-              error: error.message,
-            });
+          res.status(500).json({
+            message: "Failed to process the file",
+            error: error.message,
+          });
         }
       }
     );
@@ -2160,6 +2631,7 @@ cron.schedule("0 */4 * * *", () => {
         deliveryCost,
         advance,
         discount,
+        status,
         grandTotal,
       } = req.body;
 
@@ -2172,6 +2644,7 @@ cron.schedule("0 */4 * * *", () => {
         address,
         note,
         products,
+        status,
         deliveryCost: deliveryCost || 0,
         advance: advance || 0,
         discount: discount || 0,
@@ -2189,19 +2662,15 @@ cron.schedule("0 */4 * * *", () => {
           { $set: { lastCode: invoiceId } }
         );
 
-        res
-          .status(201)
-          .json({
-            message: "Order created and lastCode updated successfully!",
-          });
+        res.status(201).json({
+          message: "Order created and lastCode updated successfully!",
+        });
       } catch (error) {
         console.error("Error creating order or updating lastCode:", error);
-        res
-          .status(500)
-          .json({
-            message: "Failed to create order and update lastCode",
-            error,
-          });
+        res.status(500).json({
+          message: "Failed to create order and update lastCode",
+          error,
+        });
       }
     });
 
