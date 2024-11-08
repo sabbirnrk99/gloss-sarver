@@ -18,6 +18,7 @@ app.use(
       "http://localhost:5174",
       "http://localhost:5175",
       "http://localhost:5177",
+      "http://localhost:5178",
       "https://gloss-clint.web.app",
       "https://glossandglows.com",
 
@@ -65,38 +66,62 @@ async function run() {
     const redxPaymentCollection = database.collection("RedxPayment");
     const categoryCollection = database.collection("Category");
 
-    // API Route to get products by subcategory name
-    app.get("/api/products/subcategory/:subcategory", async (req, res) => {
-      const { subcategory } = req.params; // e.g., "Laptops"
+    // API Route to get products by subcategory slug
+    app.get("/api/products/subcategory/:subCategorySlug", async (req, res) => {
+      const { subCategorySlug } = req.params;
+
       try {
+        // Step 1: Find subcategory name by slug in Category collection
+        const category = await categoryCollection.findOne({
+          "subcategories.slug": subCategorySlug,
+        });
+
+        if (!category) {
+          return res.status(404).json({ message: "Subcategory not found" });
+        }
+
+        // Extract subcategory name from the category document
+        const subCategoryName = category.subcategories.find(
+          (sub) => sub.slug === subCategorySlug
+        )?.name;
+
+        if (!subCategoryName) {
+          return res.status(404).json({ message: "Subcategory name not found" });
+        }
+
+        // Step 2: Find products by subCategoryName in Product collection
         const products = await productCollection
           .find({
             "parentcode.subproduct": {
               $elemMatch: {
-                subcategory: subcategory, // Filter by subcategory
-                status: "Website", // Filter by status
+                subcategory: subCategoryName, // Use name instead of slug
+                status: "Website",
               },
             },
           })
           .toArray();
 
-        // Filter subproducts matching the specified subcategory and status
+        // Filter the subproducts within each product to include only matching subcategory name and status
         const filteredProducts = products
-          .map((product) => ({
-            ...product,
-            subproduct: product.parentcode.subproduct.filter(
-              (sub) =>
-                sub.subcategory === subcategory && sub.status === "Website"
-            ),
-          }))
-          .filter((p) => p.subproduct.length > 0); // Only include products with matching subproducts
+          .map((product) => {
+            const matchingSubproducts = product.parentcode.subproduct.filter(
+              (sub) => sub.subcategory === subCategoryName && sub.status === "Website"
+            );
+
+            return {
+              ...product,
+              parentcode: {
+                ...product.parentcode,
+                subproduct: matchingSubproducts,
+              },
+            };
+          })
+          .filter((p) => p.parentcode.subproduct.length > 0); // Exclude products without matching subproducts
 
         res.json({ products: filteredProducts });
       } catch (error) {
-        console.error("Error fetching products by subcategory:", error);
-        res
-          .status(500)
-          .json({ message: "Failed to fetch products by subcategory" });
+        console.error("Error fetching products by subcategory slug:", error);
+        res.status(500).json({ message: "Failed to fetch products by subcategory slug" });
       }
     });
 
@@ -167,40 +192,40 @@ async function run() {
       }
     });
 
-    
 
-// Delete Subcategory or Entire Parent Category
-app.delete("/api/categories", async (req, res) => {
-  const { parentCategoryId, subCategorySlug } = req.body;
 
-  try {
-    if (subCategorySlug) {
-      // Remove the specific subcategory by its slug
-      const updateResult = await categoryCollection.updateOne(
-        { _id: new ObjectId(parentCategoryId) },
-        { $pull: { subcategories: { slug: subCategorySlug } } }
-      );
+    // Delete Subcategory or Entire Parent Category
+    app.delete("/api/categories", async (req, res) => {
+      const { parentCategoryId, subCategorySlug } = req.body;
 
-      if (updateResult.modifiedCount === 0) {
-        return res.status(404).json({ message: "Subcategory not found" });
+      try {
+        if (subCategorySlug) {
+          // Remove the specific subcategory by its slug
+          const updateResult = await categoryCollection.updateOne(
+            { _id: new ObjectId(parentCategoryId) },
+            { $pull: { subcategories: { slug: subCategorySlug } } }
+          );
+
+          if (updateResult.modifiedCount === 0) {
+            return res.status(404).json({ message: "Subcategory not found" });
+          }
+          res.status(200).json({ message: "Subcategory deleted successfully" });
+        } else {
+          // Remove the entire parent category using its _id
+          const deleteResult = await categoryCollection.deleteOne({
+            _id: new ObjectId(parentCategoryId),
+          });
+
+          if (deleteResult.deletedCount === 0) {
+            return res.status(404).json({ message: "Category not found" });
+          }
+          res.status(200).json({ message: "Category deleted successfully" });
+        }
+      } catch (error) {
+        console.error("Error deleting category:", error);
+        res.status(500).json({ message: "Failed to delete category", error });
       }
-      res.status(200).json({ message: "Subcategory deleted successfully" });
-    } else {
-      // Remove the entire parent category using its _id
-      const deleteResult = await categoryCollection.deleteOne({
-        _id: new ObjectId(parentCategoryId),
-      });
-
-      if (deleteResult.deletedCount === 0) {
-        return res.status(404).json({ message: "Category not found" });
-      }
-      res.status(200).json({ message: "Category deleted successfully" });
-    }
-  } catch (error) {
-    console.error("Error deleting category:", error);
-    res.status(500).json({ message: "Failed to delete category", error });
-  }
-});
+    });
 
     // Add subcategory to a parent category
     app.post("/api/categories/add-subcategory", async (req, res) => {
@@ -342,45 +367,45 @@ app.delete("/api/categories", async (req, res) => {
     });
 
     // Fetch related products by category (excluding the current product and ensuring status is "Website")
-app.get("/api/category/products", async (req, res) => {
-  const { category, limit = 4, excludeSku } = req.query;
+    app.get("/api/category/products", async (req, res) => {
+      const { category, limit = 4, excludeSku } = req.query;
 
-  try {
-    const pipeline = [
-      {
-        $match: {
-          category,
-          "parentcode.subproduct": {
-            $elemMatch: { sku: { $ne: excludeSku }, status: "Website" }
-          }
-        }
-      },
-      {
-        $project: {
-          "parentcode.subproduct": {
-            $filter: {
-              input: "$parentcode.subproduct",
-              as: "sub",
-              cond: {
-                $and: [
-                  { $ne: ["$$sub.sku", excludeSku] },
-                  { $eq: ["$$sub.status", "Website"] }
-                ]
+      try {
+        const pipeline = [
+          {
+            $match: {
+              category,
+              "parentcode.subproduct": {
+                $elemMatch: { sku: { $ne: excludeSku }, status: "Website" }
               }
             }
-          }
-        }
-      },
-      { $limit: parseInt(limit, 10) }
-    ];
+          },
+          {
+            $project: {
+              "parentcode.subproduct": {
+                $filter: {
+                  input: "$parentcode.subproduct",
+                  as: "sub",
+                  cond: {
+                    $and: [
+                      { $ne: ["$$sub.sku", excludeSku] },
+                      { $eq: ["$$sub.status", "Website"] }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          { $limit: parseInt(limit, 10) }
+        ];
 
-    const products = await productCollection.aggregate(pipeline).toArray();
-    res.json({ products });
-  } catch (error) {
-    console.error("Error fetching related products:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+        const products = await productCollection.aggregate(pipeline).toArray();
+        res.json({ products });
+      } catch (error) {
+        console.error("Error fetching related products:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
     // 3. Fetch products with pagination and filter by price range and category
     app.get("/api/products/filter", async (req, res) => {
@@ -478,47 +503,47 @@ app.get("/api/category/products", async (req, res) => {
     app.get("/api/products/pagination", async (req, res) => {
       const { category, page = 1, limit = 20 } = req.query;
       const filters = {};
-  
+
       if (category) {
-          filters["parentcode.subproduct.category"] = category;
+        filters["parentcode.subproduct.category"] = category;
       }
-  
+
       filters["parentcode.subproduct.status"] = "Website";
       filters["parentcode.subproduct.selling_price"] = { $gt: 0 };
-  
+
       console.log("Query Parameters:", { category, page, limit });
       console.log("Filters Applied:", filters);
-  
+
       try {
-          const productCollection = client.db("Trendy_management").collection("Product");
-  
-          // Fetch products with filters, pagination, and projection to limit data size
-          const products = await productCollection
-              .find(filters, {
-                  projection: {
-                      "parentcode.subproduct.sku": 1,
-                      "parentcode.subproduct.name": 1,
-                      "parentcode.subproduct.selling_price": 1,
-                      "parentcode.subproduct.thumbnail": 1,
-                      "parentcode.subproduct.slug": 1, // Include slug in projection
-                  }
-              })
-              .skip((page - 1) * parseInt(limit, 10))
-              .limit(parseInt(limit, 10))
-              .toArray();
-  
-          const totalProducts = await productCollection.countDocuments(filters);
-          const totalPages = Math.ceil(totalProducts / limit);
-  
-          console.log("Fetched Products Count:", products.length);
-          console.log("Total Products:", totalProducts, "Total Pages:", totalPages);
-  
-          res.json({ products, totalPages });
+        const productCollection = client.db("Trendy_management").collection("Product");
+
+        // Fetch products with filters, pagination, and projection to limit data size
+        const products = await productCollection
+          .find(filters, {
+            projection: {
+              "parentcode.subproduct.sku": 1,
+              "parentcode.subproduct.name": 1,
+              "parentcode.subproduct.selling_price": 1,
+              "parentcode.subproduct.thumbnail": 1,
+              "parentcode.subproduct.slug": 1, // Include slug in projection
+            }
+          })
+          .skip((page - 1) * parseInt(limit, 10))
+          .limit(parseInt(limit, 10))
+          .toArray();
+
+        const totalProducts = await productCollection.countDocuments(filters);
+        const totalPages = Math.ceil(totalProducts / limit);
+
+        console.log("Fetched Products Count:", products.length);
+        console.log("Total Products:", totalProducts, "Total Pages:", totalPages);
+
+        res.json({ products, totalPages });
       } catch (error) {
-          console.error("Error fetching products:", error);
-          res.status(500).json({ message: "Failed to fetch products" });
+        console.error("Error fetching products:", error);
+        res.status(500).json({ message: "Failed to fetch products" });
       }
-  });
+    });
 
     // Function to check and update OrderManagement collection based on RedxPayment data
     const updateOrderManagementForRedx = async () => {
@@ -928,242 +953,242 @@ app.get("/api/category/products", async (req, res) => {
 
     app.post("/api/orders/consignment-upload", async (req, res) => {
       const { orders } = req.body;
-  
+
       if (!orders || !Array.isArray(orders)) {
-          return res
-              .status(400)
-              .json({ message: "Invalid data format. Orders should be an array." });
+        return res
+          .status(400)
+          .json({ message: "Invalid data format. Orders should be an array." });
       }
-  
+
       try {
-          for (let order of orders) {
-              const invoiceId = order.invoiceId;
-  
-              // Check if the order with the same invoiceId already exists
-              const existingOrder = await ordersCollection.findOne({ invoiceId });
-  
-              if (existingOrder) {
-                  // Merge products if the order already exists
-                  for (let product of order.products) {
-                      const existingProductIndex = existingOrder.products.findIndex(
-                          (p) => p.sku === product.sku
-                      );
-                      if (existingProductIndex !== -1) {
-                          // If the product exists, update its quantity and total
-                          existingOrder.products[existingProductIndex].qty += parseInt(
-                              product.qty
-                          );
-                          existingOrder.products[existingProductIndex].total +=
-                              parseFloat(product.total);
-                      } else {
-                          // If the product doesn't exist, add it to the products array
-                          existingOrder.products.push({
-                              parentSku: product.parentSku,
-                              sku: product.sku,
-                              selling_price: parseFloat(product.selling_price),
-                              qty: parseInt(product.qty),
-                              total: parseFloat(product.total),
-                              skus: product.skus.map((subSku) => ({
-                                  sku: subSku.sku,
-                                  name: subSku.name,
-                                  buying_price: parseFloat(subSku.buying_price),
-                                  selling_price: parseFloat(subSku.selling_price),
-                                  qty: parseInt(subSku.qty),
-                              })),
-                          });
-                      }
-                  }
-                  // Update existing order's total amounts and consignment details
-                  existingOrder.deliveryCost =
-                      parseFloat(order.deliveryCost) || existingOrder.deliveryCost;
-                  existingOrder.advance =
-                      parseFloat(order.advance) || existingOrder.advance;
-                  existingOrder.discount =
-                      parseFloat(order.discount) || existingOrder.discount;
-                  existingOrder.grandTotal = existingOrder.products.reduce(
-                      (sum, product) => sum + product.total,
-                      0
-                  );
-                  existingOrder.consignmentId =
-                      order.consignmentId || existingOrder.consignmentId;
-                  existingOrder.status = order.status || existingOrder.status;
-  
-                  // Update the order in the database
-                  await ordersCollection.updateOne(
-                      { invoiceId },
-                      { $set: existingOrder }
-                  );
+        for (let order of orders) {
+          const invoiceId = order.invoiceId;
+
+          // Check if the order with the same invoiceId already exists
+          const existingOrder = await ordersCollection.findOne({ invoiceId });
+
+          if (existingOrder) {
+            // Merge products if the order already exists
+            for (let product of order.products) {
+              const existingProductIndex = existingOrder.products.findIndex(
+                (p) => p.sku === product.sku
+              );
+              if (existingProductIndex !== -1) {
+                // If the product exists, update its quantity and total
+                existingOrder.products[existingProductIndex].qty += parseInt(
+                  product.qty
+                );
+                existingOrder.products[existingProductIndex].total +=
+                  parseFloat(product.total);
               } else {
-                  // If the order doesn't exist, create a new order
-                  const newOrder = {
-                      invoiceId: order.invoiceId || "",
-                      date: order.date || "",  // Store date as string directly
-                      pageName: order.pageName || "",
-                      customerName: order.customerName || "",
-                      phoneNumber: order.phoneNumber || "",
-                      address: order.address || "",
-                      note: order.note || "",
-                      products: order.products.map((product) => ({
-                          parentSku: product.parentSku,
-                          sku: product.sku,
-                          selling_price: parseFloat(product.selling_price),
-                          qty: parseInt(product.qty),
-                          total: parseFloat(product.total),
-                          skus: product.skus.map((subSku) => ({
-                              sku: subSku.sku,
-                              name: subSku.name,
-                              buying_price: parseFloat(subSku.buying_price),
-                              selling_price: parseFloat(subSku.selling_price),
-                              qty: parseInt(subSku.qty),
-                          })),
-                      })),
-                      deliveryCost: parseFloat(order.deliveryCost) || 0,
-                      advance: parseFloat(order.advance) || 0,
-                      discount: parseFloat(order.discount) || 0,
-                      grandTotal: parseFloat(order.grandTotal) || 0,
-                      consignmentId: order.consignmentId || "",
-                      status: order.status || "Pending",
-                      createdAt: new Date(),
-                      updatedAt: new Date(),
-                  };
-  
-                  // Insert the new order into the database
-                  await ordersCollection.insertOne(newOrder);
+                // If the product doesn't exist, add it to the products array
+                existingOrder.products.push({
+                  parentSku: product.parentSku,
+                  sku: product.sku,
+                  selling_price: parseFloat(product.selling_price),
+                  qty: parseInt(product.qty),
+                  total: parseFloat(product.total),
+                  skus: product.skus.map((subSku) => ({
+                    sku: subSku.sku,
+                    name: subSku.name,
+                    buying_price: parseFloat(subSku.buying_price),
+                    selling_price: parseFloat(subSku.selling_price),
+                    qty: parseInt(subSku.qty),
+                  })),
+                });
               }
+            }
+            // Update existing order's total amounts and consignment details
+            existingOrder.deliveryCost =
+              parseFloat(order.deliveryCost) || existingOrder.deliveryCost;
+            existingOrder.advance =
+              parseFloat(order.advance) || existingOrder.advance;
+            existingOrder.discount =
+              parseFloat(order.discount) || existingOrder.discount;
+            existingOrder.grandTotal = existingOrder.products.reduce(
+              (sum, product) => sum + product.total,
+              0
+            );
+            existingOrder.consignmentId =
+              order.consignmentId || existingOrder.consignmentId;
+            existingOrder.status = order.status || existingOrder.status;
+
+            // Update the order in the database
+            await ordersCollection.updateOne(
+              { invoiceId },
+              { $set: existingOrder }
+            );
+          } else {
+            // If the order doesn't exist, create a new order
+            const newOrder = {
+              invoiceId: order.invoiceId || "",
+              date: order.date || "",  // Store date as string directly
+              pageName: order.pageName || "",
+              customerName: order.customerName || "",
+              phoneNumber: order.phoneNumber || "",
+              address: order.address || "",
+              note: order.note || "",
+              products: order.products.map((product) => ({
+                parentSku: product.parentSku,
+                sku: product.sku,
+                selling_price: parseFloat(product.selling_price),
+                qty: parseInt(product.qty),
+                total: parseFloat(product.total),
+                skus: product.skus.map((subSku) => ({
+                  sku: subSku.sku,
+                  name: subSku.name,
+                  buying_price: parseFloat(subSku.buying_price),
+                  selling_price: parseFloat(subSku.selling_price),
+                  qty: parseInt(subSku.qty),
+                })),
+              })),
+              deliveryCost: parseFloat(order.deliveryCost) || 0,
+              advance: parseFloat(order.advance) || 0,
+              discount: parseFloat(order.discount) || 0,
+              grandTotal: parseFloat(order.grandTotal) || 0,
+              consignmentId: order.consignmentId || "",
+              status: order.status || "Pending",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            // Insert the new order into the database
+            await ordersCollection.insertOne(newOrder);
           }
-  
-          res.status(200).json({
-              message:
-                  "Orders uploaded and merged successfully with consignment details.",
-          });
+        }
+
+        res.status(200).json({
+          message:
+            "Orders uploaded and merged successfully with consignment details.",
+        });
       } catch (error) {
-          console.error(
-              "Error uploading and merging orders with consignment:",
-              error
-          );
-          res.status(500).json({
-              message: "Error uploading and merging orders with consignment.",
-              error,
-          });
+        console.error(
+          "Error uploading and merging orders with consignment:",
+          error
+        );
+        res.status(500).json({
+          message: "Error uploading and merging orders with consignment.",
+          error,
+        });
       }
-  });
-  
+    });
+
 
     // Bulk upload orders endpoint with merging logic
     app.post("/api/orders/bulk-upload", async (req, res) => {
       const { orders } = req.body;
-  
+
       if (!orders || !Array.isArray(orders)) {
-          return res
-              .status(400)
-              .json({ message: "Invalid data format. Orders should be an array." });
+        return res
+          .status(400)
+          .json({ message: "Invalid data format. Orders should be an array." });
       }
-  
+
       try {
-          for (let order of orders) {
-              const invoiceId = order.invoiceId;
-  
-              // Check if the order with the same invoiceId already exists
-              const existingOrder = await ordersCollection.findOne({ invoiceId });
-  
-              if (existingOrder) {
-                  // Merge products if the order already exists
-                  for (let product of order.products) {
-                      const existingProductIndex = existingOrder.products.findIndex(
-                          (p) => p.sku === product.sku
-                      );
-                      if (existingProductIndex !== -1) {
-                          // If the product exists, update its quantity and total
-                          existingOrder.products[existingProductIndex].qty += parseInt(
-                              product.qty
-                          );
-                          existingOrder.products[existingProductIndex].total +=
-                              parseFloat(product.total);
-                      } else {
-                          // If the product doesn't exist, add it to the products array
-                          existingOrder.products.push({
-                              parentSku: product.parentSku,
-                              sku: product.sku,
-                              selling_price: parseFloat(product.selling_price),
-                              qty: parseInt(product.qty),
-                              total: parseFloat(product.total),
-                              skus: product.skus.map((subSku) => ({
-                                  sku: subSku.sku,
-                                  name: subSku.name,
-                                  buying_price: parseFloat(subSku.buying_price),
-                                  selling_price: parseFloat(subSku.selling_price),
-                                  qty: parseInt(subSku.qty),
-                              })),
-                          });
-                      }
-                  }
-  
-                  // Update existing order's total amounts and delivery information
-                  existingOrder.deliveryCost =
-                      parseFloat(order.deliveryCost) || existingOrder.deliveryCost;
-                  existingOrder.advance =
-                      parseFloat(order.advance) || existingOrder.advance;
-                  existingOrder.discount =
-                      parseFloat(order.discount) || existingOrder.discount;
-                  existingOrder.grandTotal = existingOrder.products.reduce(
-                      (sum, product) => sum + product.total,
-                      0
-                  );
-  
-                  // Update the order in the database
-                  await ordersCollection.updateOne(
-                      { invoiceId },
-                      { $set: existingOrder }
-                  );
+        for (let order of orders) {
+          const invoiceId = order.invoiceId;
+
+          // Check if the order with the same invoiceId already exists
+          const existingOrder = await ordersCollection.findOne({ invoiceId });
+
+          if (existingOrder) {
+            // Merge products if the order already exists
+            for (let product of order.products) {
+              const existingProductIndex = existingOrder.products.findIndex(
+                (p) => p.sku === product.sku
+              );
+              if (existingProductIndex !== -1) {
+                // If the product exists, update its quantity and total
+                existingOrder.products[existingProductIndex].qty += parseInt(
+                  product.qty
+                );
+                existingOrder.products[existingProductIndex].total +=
+                  parseFloat(product.total);
               } else {
-                  // If the order doesn't exist, create a new order
-                  const newOrder = {
-                      invoiceId: order.invoiceId || "",
-                      date: order.date || "",  // Store date as a string
-                      pageName: order.pageName || "",
-                      customerName: order.customerName || "",
-                      phoneNumber: order.phoneNumber || "",
-                      address: order.address || "",
-                      note: order.note || "",
-                      products: order.products.map((product) => ({
-                          parentSku: product.parentSku,
-                          sku: product.sku,
-                          selling_price: parseFloat(product.selling_price),
-                          qty: parseInt(product.qty),
-                          total: parseFloat(product.total),
-                          skus: product.skus.map((subSku) => ({
-                              sku: subSku.sku,
-                              name: subSku.name,
-                              buying_price: parseFloat(subSku.buying_price),
-                              selling_price: parseFloat(subSku.selling_price),
-                              qty: parseInt(subSku.qty),
-                          })),
-                      })),
-                      deliveryCost: parseFloat(order.deliveryCost) || 0,
-                      advance: parseFloat(order.advance) || 0,
-                      discount: parseFloat(order.discount) || 0,
-                      grandTotal: parseFloat(order.grandTotal) || 0,
-                      status: order.status || "Pending",
-                      createdAt: new Date(),
-                      updatedAt: new Date(),
-                  };
-  
-                  // Insert the new order into the database
-                  await ordersCollection.insertOne(newOrder);
+                // If the product doesn't exist, add it to the products array
+                existingOrder.products.push({
+                  parentSku: product.parentSku,
+                  sku: product.sku,
+                  selling_price: parseFloat(product.selling_price),
+                  qty: parseInt(product.qty),
+                  total: parseFloat(product.total),
+                  skus: product.skus.map((subSku) => ({
+                    sku: subSku.sku,
+                    name: subSku.name,
+                    buying_price: parseFloat(subSku.buying_price),
+                    selling_price: parseFloat(subSku.selling_price),
+                    qty: parseInt(subSku.qty),
+                  })),
+                });
               }
+            }
+
+            // Update existing order's total amounts and delivery information
+            existingOrder.deliveryCost =
+              parseFloat(order.deliveryCost) || existingOrder.deliveryCost;
+            existingOrder.advance =
+              parseFloat(order.advance) || existingOrder.advance;
+            existingOrder.discount =
+              parseFloat(order.discount) || existingOrder.discount;
+            existingOrder.grandTotal = existingOrder.products.reduce(
+              (sum, product) => sum + product.total,
+              0
+            );
+
+            // Update the order in the database
+            await ordersCollection.updateOne(
+              { invoiceId },
+              { $set: existingOrder }
+            );
+          } else {
+            // If the order doesn't exist, create a new order
+            const newOrder = {
+              invoiceId: order.invoiceId || "",
+              date: order.date || "",  // Store date as a string
+              pageName: order.pageName || "",
+              customerName: order.customerName || "",
+              phoneNumber: order.phoneNumber || "",
+              address: order.address || "",
+              note: order.note || "",
+              products: order.products.map((product) => ({
+                parentSku: product.parentSku,
+                sku: product.sku,
+                selling_price: parseFloat(product.selling_price),
+                qty: parseInt(product.qty),
+                total: parseFloat(product.total),
+                skus: product.skus.map((subSku) => ({
+                  sku: subSku.sku,
+                  name: subSku.name,
+                  buying_price: parseFloat(subSku.buying_price),
+                  selling_price: parseFloat(subSku.selling_price),
+                  qty: parseInt(subSku.qty),
+                })),
+              })),
+              deliveryCost: parseFloat(order.deliveryCost) || 0,
+              advance: parseFloat(order.advance) || 0,
+              discount: parseFloat(order.discount) || 0,
+              grandTotal: parseFloat(order.grandTotal) || 0,
+              status: order.status || "Pending",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+
+            // Insert the new order into the database
+            await ordersCollection.insertOne(newOrder);
           }
-  
-          res
-              .status(200)
-              .json({ message: "Orders uploaded and merged successfully." });
+        }
+
+        res
+          .status(200)
+          .json({ message: "Orders uploaded and merged successfully." });
       } catch (error) {
-          console.error("Error uploading and merging orders:", error);
-          res
-              .status(500)
-              .json({ message: "Error uploading and merging orders.", error });
+        console.error("Error uploading and merging orders:", error);
+        res
+          .status(500)
+          .json({ message: "Error uploading and merging orders.", error });
       }
-  });
-  
+    });
+
 
     app.get("/api/orders/stock-out", async (req, res) => {
       try {
@@ -1211,8 +1236,7 @@ app.get("/api/category/products", async (req, res) => {
             });
           } else {
             console.warn(
-              `Order ${
-                order.invoiceId || "Unknown ID"
+              `Order ${order.invoiceId || "Unknown ID"
               } has no valid products array.`
             );
           }
