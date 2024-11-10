@@ -1438,7 +1438,7 @@ async function run() {
         console.log(`Fetching report data for range: ${start} to ${end}`);
 
         // Define the base query for all documents within the date range
-        const dateRangeQuery = { createdAt: { $gte: start, $lte: end } };
+        const dateRangeQuery = {updatedAt: { $gte: start, $lte: end } };
 
         // Define the queries for different statuses and logistic statuses
         const statusQueries = {
@@ -1483,11 +1483,11 @@ async function run() {
           ordersCollection.countDocuments(statusQueries.totalPathaowOrders),
           ordersCollection.countDocuments(statusQueries.totalPending),
           ordersCollection.countDocuments(statusQueries.totalStoreOrders),
+          ordersCollection.countDocuments(statusQueries.totalCancelledMemo),
+          ordersCollection.countDocuments(statusQueries.totalNoAnswerOrders),
           ordersCollection.countDocuments(statusQueries.totalScheduleOrders),
           ordersCollection.countDocuments(statusQueries.totalStockOutOrders),
           ordersCollection.countDocuments(statusQueries.totalTomorrowOrders),
-          ordersCollection.countDocuments(statusQueries.totalCancelledMemo),
-          ordersCollection.countDocuments(statusQueries.totalNoAnswerOrders),
           ordersCollection.countDocuments(statusQueries.totalPrintedMemo),
           ordersCollection.countDocuments(statusQueries.totalReturned),
           ordersCollection.countDocuments(statusQueries.totalDamaged),
@@ -1502,11 +1502,11 @@ async function run() {
           totalPathaowOrders,
           totalPending,
           totalStoreOrders,
+          totalCancelledMemo,
+          totalNoAnswerOrders,
           totalScheduleOrders,
           totalStockOutOrders,
           totalTomorrowOrders,
-          totalCancelledMemo,
-          totalNoAnswerOrders,
           totalPrintedMemo,
           totalReturned,
           totalDamaged,
