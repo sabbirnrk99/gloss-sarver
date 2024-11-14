@@ -17,6 +17,7 @@ app.use(
       "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:5175",
+      "http://localhost:5176",
       "http://localhost:5177",
       "http://localhost:5178",
       "https://gloss-clint.web.app",
@@ -953,125 +954,133 @@ async function run() {
 
     app.post("/api/orders/consignment-upload", async (req, res) => {
       const { orders } = req.body;
-
+    
       if (!orders || !Array.isArray(orders)) {
-        return res
-          .status(400)
-          .json({ message: "Invalid data format. Orders should be an array." });
+        return res.status(400).json({ message: "Invalid data format. Orders should be an array." });
       }
-
+    
       try {
         for (let order of orders) {
+          console.log("Processing Order:", JSON.stringify(order, null, 2));
+    
           const invoiceId = order.invoiceId;
-
+    
           // Check if the order with the same invoiceId already exists
           const existingOrder = await ordersCollection.findOne({ invoiceId });
-
+    
           if (existingOrder) {
+            console.log("Existing Order Found. Merging Products:", JSON.stringify(existingOrder, null, 2));
+    
             // Merge products if the order already exists
             for (let product of order.products) {
-              const existingProductIndex = existingOrder.products.findIndex(
-                (p) => p.sku === product.sku
-              );
+              console.log("Processing Product:", JSON.stringify(product, null, 2));
+    
+              const existingProductIndex = existingOrder.products.findIndex((p) => p.sku === product.sku);
               if (existingProductIndex !== -1) {
+                console.log("Product Exists. Updating Quantity and Total:");
+                console.log("Existing Quantity:", existingOrder.products[existingProductIndex].qty);
+                console.log("New Quantity to Add:", product.qty);
+    
                 // If the product exists, update its quantity and total
-                existingOrder.products[existingProductIndex].qty += parseInt(
-                  product.qty
-                );
-                existingOrder.products[existingProductIndex].total +=
-                  parseFloat(product.total);
+                existingOrder.products[existingProductIndex].qty += parseInt(product.qty || 0);
+                existingOrder.products[existingProductIndex].total += parseFloat(product.total || 0);
               } else {
+                console.log("New Product. Adding to Order:");
+                console.log("Product Selling Price:", product.selling_price);
+                console.log("Product Quantity:", product.qty);
+                console.log("Product Total:", product.total);
+    
                 // If the product doesn't exist, add it to the products array
                 existingOrder.products.push({
-                  parentSku: product.parentSku,
-                  sku: product.sku,
-                  selling_price: parseFloat(product.selling_price),
-                  qty: parseInt(product.qty),
-                  total: parseFloat(product.total),
-                  skus: product.skus.map((subSku) => ({
-                    sku: subSku.sku,
-                    name: subSku.name,
-                    buying_price: parseFloat(subSku.buying_price),
-                    selling_price: parseFloat(subSku.selling_price),
-                    qty: parseInt(subSku.qty),
-                  })),
+                  parentSku: product.parentSku || '',
+                  sku: product.sku || '',
+                  selling_price: parseFloat(product.selling_price || 0),
+                  qty: parseInt(product.qty || 0),
+                  total: parseFloat(product.total || 0),
+                  skus: product.skus.map((subSku) => {
+                    console.log("Processing Sub-SKU:", JSON.stringify(subSku, null, 2));
+                    return {
+                      sku: subSku.sku || '',
+                      name: subSku.name || '',
+                      buying_price: parseFloat(subSku.buying_price || 0),
+                      selling_price: parseFloat(subSku.selling_price || 0),
+                      qty: parseInt(subSku.qty || 0),
+                    };
+                  }),
                 });
               }
             }
+    
             // Update existing order's total amounts and consignment details
-            existingOrder.deliveryCost =
-              parseFloat(order.deliveryCost) || existingOrder.deliveryCost;
-            existingOrder.advance =
-              parseFloat(order.advance) || existingOrder.advance;
-            existingOrder.discount =
-              parseFloat(order.discount) || existingOrder.discount;
-            existingOrder.grandTotal = existingOrder.products.reduce(
-              (sum, product) => sum + product.total,
-              0
-            );
-            existingOrder.consignmentId =
-              order.consignmentId || existingOrder.consignmentId;
+            existingOrder.deliveryCost = parseFloat(order.deliveryCost || 0);
+            existingOrder.advance = parseFloat(order.advance || 0);
+            existingOrder.discount = parseFloat(order.discount || 0);
+            existingOrder.grandTotal = existingOrder.products.reduce((sum, product) => sum + (product.total || 0), 0);
+            existingOrder.consignmentId = order.consignmentId || existingOrder.consignmentId;
             existingOrder.status = order.status || existingOrder.status;
-
+            existingOrder.updatedAt = new Date();
+    
+            console.log("Updated Existing Order:", JSON.stringify(existingOrder, null, 2));
+    
             // Update the order in the database
-            await ordersCollection.updateOne(
-              { invoiceId },
-              { $set: existingOrder }
-            );
+            await ordersCollection.updateOne({ invoiceId }, { $set: existingOrder });
           } else {
-            // If the order doesn't exist, create a new order
+            console.log("New Order. Creating Entry:");
+    
             const newOrder = {
-              invoiceId: order.invoiceId || "",
-              date: order.date || "",  // Store date as string directly
-              pageName: order.pageName || "",
-              customerName: order.customerName || "",
-              phoneNumber: order.phoneNumber || "",
-              address: order.address || "",
-              note: order.note || "",
-              products: order.products.map((product) => ({
-                parentSku: product.parentSku,
-                sku: product.sku,
-                selling_price: parseFloat(product.selling_price),
-                qty: parseInt(product.qty),
-                total: parseFloat(product.total),
-                skus: product.skus.map((subSku) => ({
-                  sku: subSku.sku,
-                  name: subSku.name,
-                  buying_price: parseFloat(subSku.buying_price),
-                  selling_price: parseFloat(subSku.selling_price),
-                  qty: parseInt(subSku.qty),
-                })),
-              })),
-              deliveryCost: parseFloat(order.deliveryCost) || 0,
-              advance: parseFloat(order.advance) || 0,
-              discount: parseFloat(order.discount) || 0,
-              grandTotal: parseFloat(order.grandTotal) || 0,
-              consignmentId: order.consignmentId || "",
-              status: order.status || "Pending",
+              invoiceId: order.invoiceId || '',
+              date: order.date || '',
+              pageName: order.pageName || '',
+              customerName: order.customerName || '',
+              phoneNumber: order.phoneNumber || '',
+              address: order.address || '',
+              note: order.note || '',
+              products: order.products.map((product) => {
+                console.log("Processing New Order Product:", JSON.stringify(product, null, 2));
+                return {
+                  parentSku: product.parentSku || '',
+                  sku: product.sku || '',
+                  selling_price: parseFloat(product.selling_price || 0),
+                  qty: parseInt(product.qty || 0),
+                  total: parseFloat(product.total || 0),
+                  skus: product.skus.map((subSku) => {
+                    console.log("Processing New Order Sub-SKU:", JSON.stringify(subSku, null, 2));
+                    return {
+                      sku: subSku.sku || '',
+                      name: subSku.name || '',
+                      buying_price: parseFloat(subSku.buying_price || 0),
+                      selling_price: parseFloat(subSku.selling_price || 0),
+                      qty: parseInt(subSku.qty || 0),
+                    };
+                  }),
+                };
+              }),
+              deliveryCost: parseFloat(order.deliveryCost || 0),
+              advance: parseFloat(order.advance || 0),
+              discount: parseFloat(order.discount || 0),
+              grandTotal: parseFloat(order.grandTotal || 0),
+              consignmentId: order.consignmentId || '',
+              status: order.status || 'Pending',
               createdAt: new Date(),
               updatedAt: new Date(),
             };
-
+    
+            console.log("New Order Object:", JSON.stringify(newOrder, null, 2));
+    
             // Insert the new order into the database
             await ordersCollection.insertOne(newOrder);
           }
         }
-
-        res.status(200).json({
-          message:
-            "Orders uploaded and merged successfully with consignment details.",
-        });
+    
+        res.status(200).json({ message: "Orders uploaded and merged successfully with consignment details." });
       } catch (error) {
-        console.error(
-          "Error uploading and merging orders with consignment:",
-          error
-        );
-        res.status(500).json({
-          message: "Error uploading and merging orders with consignment.",
-          error,
-        });
+        console.error("Error uploading and merging orders with consignment:", error);
+        res.status(500).json({ message: "Error uploading and merging orders with consignment.", error });
       }
     });
+    
+    
+    
 
 
     // Bulk upload orders endpoint with merging logic
@@ -1438,7 +1447,7 @@ async function run() {
         console.log(`Fetching report data for range: ${start} to ${end}`);
 
         // Define the base query for all documents within the date range
-        const dateRangeQuery = {updatedAt: { $gte: start, $lte: end } };
+        const dateRangeQuery = { updatedAt: { $gte: start, $lte: end } };
 
         // Define the queries for different statuses and logistic statuses
         const statusQueries = {
@@ -1821,55 +1830,74 @@ async function run() {
     });
 
     // Find order by status and either consignmentId or invoiceId
-    // Find order by status and either consignmentId or invoiceId
+    const { Int32 } = require('mongodb'); // Import Int32 from MongoDB
+
     app.post("/api/orders/find", async (req, res) => {
       const { consignmentId, invoiceId, status } = req.body;
 
-      // Log the received data to verify what's being passed
       console.log("API called with status:", status);
-      console.log(
-        "Received Consignment ID:",
-        consignmentId,
-        "Received Invoice ID:",
-        invoiceId
-      );
+      console.log("Received Consignment ID:", consignmentId, "| Type:", typeof consignmentId);
+      console.log("Received Invoice ID:", invoiceId, "| Type:", typeof invoiceId);
 
       try {
-        const query = {
-          status, // Always include status in the query
-        };
-
-        // If invoiceId is present, search by invoiceId, otherwise by consignmentId
-        if (invoiceId) {
-          query.invoiceId = String(invoiceId); // Ensure invoiceId is treated as a string
-          console.log("Searching with Invoice ID:", invoiceId);
-        } else if (consignmentId) {
-          query.consignmentId = Number(consignmentId); // Ensure consignmentId is treated as a number
-          console.log("Searching with Consignment ID:", consignmentId);
-        } else {
-          console.error("No ID provided for search.");
-          return res
-            .status(400)
-            .json({ message: "No valid ID provided for the search." });
+        if (!ordersCollection) {
+          console.error("Error: ordersCollection is not connected.");
+          return res.status(500).json({ message: "Database connection error" });
         }
 
-        // Perform the query
+        // Fetch and log a sample document to check field types in the collection
+        const sampleOrder = await ordersCollection.findOne({});
+        console.log("Sample document from ordersCollection:", sampleOrder);
+
+        // Initialize query based on the presence of consignmentId or invoiceId
+        let query;
+        if (consignmentId) {
+          // Use consignmentId as Int32 and match with status
+          query = {
+            status: String(status).trim(),
+            consignmentId: new Int32(consignmentId)
+          };
+          console.log("Searching by Consignment ID:", query.consignmentId);
+        } else if (invoiceId) {
+          // Use invoiceId as a string and match with status
+          query = {
+            status: String(status).trim(),
+            invoiceId: String(invoiceId)
+          };
+          console.log("Searching by Invoice ID:", query.invoiceId);
+        } else {
+          console.error("No valid ID provided for search.");
+          return res.status(400).json({ message: "No valid ID provided for search." });
+        }
+
+        console.log("Final query:", JSON.stringify(query));
+
+        // Execute the query
         const order = await ordersCollection.findOne(query);
-        console.log("Order found:", order); // Log the found order
+        console.log("Query result:", order);
 
         if (!order) {
-          console.log("No order found.");
-          return res.status(404).json({
-            message: "Order not found with the given ID and status.",
-          });
+          console.log("Order not found.");
+          return res.status(404).json({ message: "Order not found with the given ID and status." });
         }
 
+        console.log("Order found:", order);
         res.status(200).json(order);
       } catch (error) {
         console.error("Failed to retrieve order:", error);
         res.status(500).json({ message: "Failed to retrieve order", error });
       }
     });
+
+
+
+
+
+
+
+
+
+
 
     // API to find Redx order by consignmentId (string)
     app.post("/api/orders/find-redx", async (req, res) => {
